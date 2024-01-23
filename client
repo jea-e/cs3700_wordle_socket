@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import socket
+import ssl
+
+# Maximum buffer size to receive messages from server
+RECEIVE_BUFFER_SIZE = 5 * 1024 * 1024
+
+# Loads words from file into a list
+# Returns a list of words
+def load_words():
+    with open('project1-words.txt', 'r') as word_file:
+        word_list = word_file.read().splitlines()
+        return word_list
+
+# Takes previously guessed results to determine the next guess
+# Returns a word
+def guess_word(word_list, guess_result):
+    # If word_list is empty, return nothing
+    if not word_list:
+        return None
+    
+    # If it's the first guess, return 'adieu'
+    if guess_result is None:
+        word = 'adieu'
+        word_list.remove(word)
+        return word
+    # If it's not the first guess
+    # Use previous guess to eliminate characters
+    else:
+        guesses = guess_result.get('guesses')
+        previous_word = guesses[-1]
+        previous_marks = previous_word.get('marks')
+        previous_characters = previous_word.get('word')
+        previous_guess = zip(previous_marks, previous_characters)
+        char_list = []
+
+        # If the character is used in the secret word,
+        # Add character to list
+        for guess in previous_guess:
+            if guess[0] != 0:
+                if guess[1] not in char_list:
+                    char_list.append(guess[1])
+
+        # If the word in the word_list does not contain
+        # The character in the char_list,
+        # Remove the word from the word_list
+        for c in char_list:
+            word_list_copy = word_list.copy()
+            for word in word_list_copy:
+                if c not in word:
+                    word_list.remove(word)
+        
+        # Take the first word of the word list,
+        # Use it as the next guess,
+        # Remove the word from the word_list
+        return_word = word_list[0]
+        word_list.remove(return_word)
+        return return_word
+
+# Connect to TLS encrypted server
+def connect_encrypted_server(host, port, username):
+    # Connect to server
+    context = ssl.create_default_context()
+    
+    with socket.create_connection((host, port)) as s:
+        with context.wrap_socket(s, server_hostname=host) as ss:
+
+            # Send hello message
+            hello_message = {'type': 'hello',
+                                'northeastern_username': username}
+            ss.sendall(json.dumps(hello_message).encode('utf-8') + b'\n')
+
+            # Receive start message
+            data = ss.recv(RECEIVE_BUFFER_SIZE)
+            start_message = json.loads(data.decode('utf-8').strip())
+            id = start_message.get('id')
+
+            # Send guesses
+            word_list = load_words()
+            guess = guess_word(word_list, None)
+
+            # Keep sending guesses until server sends 'bye' message
+            while True:
+                # If there are no guesses, return
+                if guess is None:
+                    return
+                
+                # Create and send the guess message
+                guess_message = {'type': 'guess',
+                                 'id': id,
+                                 'word': guess}
+                ss.sendall(json.dumps(guess_message).encode('utf-8') + b'\n')
+
+                data = b''
+                while True:
+                    # Receive the guess result
+                    guess_result = ss.recv(RECEIVE_BUFFER_SIZE)
+                    data+= guess_result
+                    if guess_result[-1:] == b'\n':
+                        break
+
+                if not guess_result:
+                    print('Error')
+                    return
+                
+                guess_result = json.loads(guess_result.decode('utf-8').strip())
+
+                if guess_result.get('type') == 'retry':
+                    guess = guess_word(word_list, guess_result)
+
+                if guess_result.get('type') == 'bye':
+                    print(guess_result.get('flag'))
+                    return
+            
+# Connect to unencrypted server
+def connect_server(host, port, username):
+    # Connect to server
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((host, port))
+
+        # Send hello message
+        hello_message = {'type': 'hello',
+                            'northeastern_username': username}
+        s.sendall(json.dumps(hello_message).encode('utf-8') + b'\n')
+
+        # Receive start message
+        data = s.recv(RECEIVE_BUFFER_SIZE)
+        start_message = json.loads(data.decode('utf-8').strip())
+        id = start_message.get('id')
+
+        # Send guesses
+        word_list = load_words()
+        guess = guess_word(word_list, None)
+
+        # Keep sending guesses until server sends 'bye' message
+        while True:
+            # If there are no guesses, return
+            if guess is None:
+                return
+            
+            # Create and send the guess message
+            guess_message = {'type': 'guess',
+                                'id': id,
+                                'word': guess}
+            s.sendall(json.dumps(guess_message).encode('utf-8') + b'\n')
+
+            data = b''
+            while True:
+                # Receive the guess result
+                guess_result = s.recv(RECEIVE_BUFFER_SIZE)
+                data+= guess_result
+                if guess_result[-1:] == b'\n':
+                    break
+
+            if not guess_result:
+                print('Error')
+                return
+            
+            guess_result = json.loads(guess_result.decode('utf-8').strip())
+
+            if guess_result.get('type') == 'retry':
+                guess = guess_word(word_list, guess_result)
+
+            if guess_result.get('type') == 'bye':
+                print(guess_result.get('flag'))
+                return
+
+# Parse arguments and connect to server
+def main():
+    # Argument parsing
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', type=int, dest='port', metavar='port', default=27993)
+    parser.add_argument('-s', action='store_true')
+    parser.add_argument('hostname', metavar='<hostname>')
+    parser.add_argument('username', metavar='<Northeastern-username>')
+    args = parser.parse_args()
+
+    if (args.s):
+        args.port = 27994
+        connect_encrypted_server(args.hostname, args.port, args.username)
+    else: 
+        connect_server(args.hostname, args.port, args.username)
+
+if __name__ == '__main__':
+    main()
